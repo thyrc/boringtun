@@ -27,7 +27,7 @@ pub enum result_type {
     WIREGUARD_DONE = 0,
     /// Write dst buffer to network. Size indicates the number of bytes to write.
     WRITE_TO_NETWORK = 1,
-    /// Some error occured, no operation is required. Size indicates error code.
+    /// Some error occurred, no operation is required. Size indicates error code.
     WIREGUARD_ERROR = 2,
     /// Write dst buffer to the interface as an ipv4 packet. Size indicates the number of bytes to write.
     WRITE_TO_TUNNEL_IPV4 = 4,
@@ -49,7 +49,9 @@ pub struct stats {
     pub time_since_last_handshake: i64,
     pub tx_bytes: usize,
     pub rx_bytes: usize,
-    reserved: [u8; 64], // Make sure to add new fields in this space, keeping total size constant
+    pub estimated_loss: f32,
+    pub estimated_rtt: i32,
+    reserved: [u8; 56], // Make sure to add new fields in this space, keeping total size constant
 }
 
 impl<'a> From<TunnResult<'a>> for wireguard_result {
@@ -85,7 +87,7 @@ impl From<u32> for Verbosity {
             0 => Verbosity::None,
             1 => Verbosity::Info,
             2 => Verbosity::Debug,
-            _ => Verbosity::All,
+            _ => Verbosity::Trace,
         }
     }
 }
@@ -188,7 +190,14 @@ pub unsafe extern "C" fn new_tunnel(
         Ok(key) => key,
     };
 
-    let mut tunnel = match Tunn::new(Arc::new(private_key), Arc::new(public_key), None, None, 0) {
+    let mut tunnel = match Tunn::new(
+        Arc::new(private_key),
+        Arc::new(public_key),
+        None,
+        None,
+        0,
+        None,
+    ) {
         Ok(t) => t,
         Err(_) => return ptr::null_mut(),
     };
@@ -233,7 +242,7 @@ pub unsafe extern "C" fn wireguard_write(
     // Slices are not owned, and therefore will not be freed by Rust
     let src = slice::from_raw_parts(src, src_size as usize);
     let dst = slice::from_raw_parts_mut(dst, dst_size as usize);
-    wireguard_result::from(tunnel.tunnel_to_network(src, dst))
+    wireguard_result::from(tunnel.encapsulate(src, dst))
 }
 
 /// Read a UDP packet from the server.
@@ -250,10 +259,10 @@ pub unsafe extern "C" fn wireguard_read(
     // Slices are not owned, and therefore will not be freed by Rust
     let src = slice::from_raw_parts(src, src_size as usize);
     let dst = slice::from_raw_parts_mut(dst, dst_size as usize);
-    wireguard_result::from(tunnel.network_to_tunnel(src, dst))
+    wireguard_result::from(tunnel.decapsulate(None, src, dst))
 }
 
-/// This is a state keeping function, that need to be called preriodically.
+/// This is a state keeping function, that need to be called periodically.
 /// Recommended interval: 100ms.
 #[no_mangle]
 pub unsafe extern "C" fn wireguard_tick(
@@ -281,22 +290,24 @@ pub unsafe extern "C" fn wireguard_force_handshake(
 }
 
 /// Returns stats from the tunnel:
-/// Time of last handshake in seconds (or -1 if no handshake occured)
+/// Time of last handshake in seconds (or -1 if no handshake occurred)
 /// Number of data bytes encapsulated
 /// Number of data bytes decapsulated
 #[no_mangle]
 pub unsafe extern "C" fn wireguard_stats(tunnel: *mut Tunn) -> stats {
     let tunnel = tunnel.as_ref().unwrap();
-    let (time, tx_bytes, rx_bytes) = tunnel.stats();
+    let (time, tx_bytes, rx_bytes, estimated_loss, estimated_rtt) = tunnel.stats();
     stats {
         time_since_last_handshake: time.map(|t| t as i64).unwrap_or(-1),
         tx_bytes,
         rx_bytes,
-        reserved: [0u8; 64],
+        estimated_loss,
+        estimated_rtt: estimated_rtt.map(|r| r as i32).unwrap_or(-1),
+        reserved: [0u8; 56],
     }
 }
 
-/// Performs an iternal benchmark, and returns its result as a C-string.
+/// Performs an internal benchmark, and returns its result as a C-string.
 #[no_mangle]
 pub extern "C" fn benchmark(name: i32, idx: u32) -> *const c_char {
     if let Some(s) = do_benchmark(name != 0, idx as usize) {

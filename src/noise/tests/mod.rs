@@ -28,7 +28,7 @@ mod tests {
         }
     }
 
-    // Very dumb spinlock
+    // Very dumb spin lock
     struct SpinLock {
         lock: AtomicBool,
     }
@@ -134,7 +134,7 @@ mod tests {
         packet.extend_from_slice(&ipv4_header);
         packet.extend_from_slice(&icmp_header);
         packet.extend_from_slice(&data);
-        // Compute the checkusm of the icmp header + payload
+        // Compute the checksum of the icmp header + payload
         let icmp_checksum = ipv4_checksum(&packet[20..]);
         write_u16_be(icmp_checksum, &mut packet[20 + 2..]);
         socket.send(&packet).unwrap();
@@ -168,7 +168,7 @@ mod tests {
         network_socket: UdpSocket,
         static_private: &str,
         peer_static_public: &str,
-        logger: Box<Fn(&str) + Send>,
+        logger: Box<dyn Fn(&str) + Send>,
         close: Arc<AtomicBool>,
     ) -> UdpSocket {
         let static_private = static_private.parse().unwrap();
@@ -180,6 +180,7 @@ mod tests {
             None,
             None,
             100,
+            None,
         )
         .unwrap();
         peer.set_logger(logger, Verbosity::Debug);
@@ -220,13 +221,13 @@ mod tests {
                     }
                 };
 
-                match peer.network_to_tunnel(&recv_buf[..n], &mut send_buf) {
+                match peer.decapsulate(None, &recv_buf[..n], &mut send_buf) {
                     TunnResult::WriteToNetwork(packet) => {
                         network_socket.send(packet).unwrap();
                         // Send form queue?
                         loop {
                             let mut send_buf = [0u8; MAX_PACKET];
-                            match peer.network_to_tunnel(&[], &mut send_buf) {
+                            match peer.decapsulate(None, &[], &mut send_buf) {
                                 TunnResult::WriteToNetwork(packet) => {
                                     network_socket.send(packet).unwrap();
                                 }
@@ -267,7 +268,7 @@ mod tests {
                     }
                 };
 
-                match peer.tunnel_to_network(&recv_buf[..n], &mut send_buf) {
+                match peer.encapsulate(&recv_buf[..n], &mut send_buf) {
                     TunnResult::WriteToNetwork(packet) => {
                         network_socket.send(packet).unwrap();
                     }
@@ -338,7 +339,7 @@ mod tests {
 
     #[test]
     fn wireguard_handshake() {
-        // Test the connection is succesfully established and some packets are passed around
+        // Test the connection is successfully established and some packets are passed around
         {
             let (peer_iface_socket_sender, client_iface_socket_sender, close) =
                 wireguard_test_pair();
@@ -437,7 +438,7 @@ mod tests {
     #[test]
     #[ignore]
     fn wireguard_interop() {
-        // Test the connection with wireguard-go is succesfully established
+        // Test the connection with wireguard-go is successfully established
         // and we are getting ping from server
         let c_key_pair = key_pair();
         let itr = 1000;
@@ -477,7 +478,7 @@ mod tests {
     #[test]
     #[ignore]
     fn wireguard_receiver() {
-        // Test the connection with wireguard-go is succesfully established
+        // Test the connection with wireguard-go is successfully established
         // when go is the initiator
         let c_key_pair = key_pair();
         let itr = 1000;
